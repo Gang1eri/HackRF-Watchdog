@@ -1,0 +1,2 @@
+[console_scripts]
+hackrf-watchdog-sweep = hackrf_watchdog.cli:main
