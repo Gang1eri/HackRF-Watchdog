@@ -84,5 +84,17 @@ python -m venv .venv
 # Activate it (Windows)
 .\.venv\Scripts\activate
 
+## Future work / ideas
+
+- **Notifications for alarms**
+  - Play a sound or show a popup when a new detection appears.
+  - Optional per-band or per-frequency filters (only alert on certain ranges).
+  - Rate limiting so you don't get spammed during noisy conditions.
+
+- **ATAK integration**
+  - Export detections as Cursor-on-Target (CoT) events.
+  - Send events to a TAK server or directly to ATAK clients.
+  - Possibly a lightweight companion script or plugin that subscribes to the watchdog and forwards alarms to ATAK.
+
 # Install dependencies
 pip install -r requirements.txt
