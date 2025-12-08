@@ -84,6 +84,9 @@ python -m venv .venv
 # Activate it (Windows)
 .\.venv\Scripts\activate
 
+# Install dependencies
+pip install -r requirements.txt
+
 ## Future work / ideas
 
 - **Notifications for alarms**
@@ -95,6 +98,3 @@ python -m venv .venv
   - Export detections as Cursor-on-Target (CoT) events.
   - Send events to a TAK server or directly to ATAK clients.
   - Possibly a lightweight companion script or plugin that subscribes to the watchdog and forwards alarms to ATAK.
-
-# Install dependencies
-pip install -r requirements.txt
