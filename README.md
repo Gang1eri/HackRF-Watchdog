@@ -44,12 +44,12 @@ It’s meant to sit in the corner and **tell you when RF activity appears**, not
   - Rows are sorted by most recent (smallest age) first.
 
 - **Text log**  
-  - Logs the max power per sweep per band:  
+  - Logs the max power per sweep per band, e.g.:  
     `Max: -61.9 dB at 902.500000 MHz (span 900.000-930.000 MHz)`  
   - Logs errors from `hackrf_sweep` (e.g. device busy, not found).
 
 - **Device selection by serial**  
-  - Dropdown lists connected HackRF boards (via `hackrf_info`) as  
+  - Dropdown lists connected HackRF boards (via `hackrf_info`) as:  
     `HackRF 0 – SERIAL`  
     `HackRF 1 – SERIAL`  
   - You can run multiple instances of the app and bind each to a different board.
@@ -86,15 +86,3 @@ python -m venv .venv
 
 # Install dependencies
 pip install -r requirements.txt
-
-## Future work / ideas
-
-- **Notifications for alarms**
-  - Play a sound or show a popup when a new detection appears.
-  - Optional per-band or per-frequency filters (only alert on certain ranges).
-  - Rate limiting so you don't get spammed during noisy conditions.
-
-- **ATAK integration**
-  - Export detections as Cursor-on-Target (CoT) events.
-  - Send events to a TAK server or directly to ATAK clients.
-  - Possibly a lightweight companion script or plugin that subscribes to the watchdog and forwards alarms to ATAK.
