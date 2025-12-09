@@ -2,16 +2,104 @@ import sys
 import time
 import statistics
 import subprocess
+import socket
+import os
 from typing import List, Dict, Any, Optional
 
+from xml.sax.saxutils import escape
 from PyQt5 import QtCore, QtGui, QtWidgets
+from PyQt5.QtMultimedia import QSoundEffect
 
 from hackrf_watchdog.sweep_backend import iter_sweep_frames, SweepBackendError
 
 
 # ---------------------------------------------------------------------------
+# ATAK / CoT integration helpers
+# ---------------------------------------------------------------------------
+
+# Multicast group ATAK is listening on (matches your "Watchdog bridge" input)
+COT_HOST = "239.2.3.1"
+COT_PORT = 6969
+
+# Approximate location of your RF station (edit these for your setup)
+STATION_LAT = 46.84878
+STATION_LON = -114.03891
+
+
+def _build_cot(lat: float, lon: float, uid: str, callsign: str, remarks: str = "") -> bytes:
+    """Build a basic CoT event XML that ATAK understands."""
+    now = time.gmtime()
+    t = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", now)
+    stale = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + 300))
+
+    lat_str = f"{lat:.6f}"
+    lon_str = f"{lon:.6f}"
+
+    callsign_esc = escape(callsign)
+    uid_esc = escape(uid)
+    remarks_esc = escape(remarks) if remarks else ""
+
+    cot = f"""<event version="2.0"
+    uid="{uid_esc}"
+    type="a-f-G-U-C"
+    how="m-g"
+    time="{t}"
+    start="{t}"
+    stale="{stale}">
+  <point lat="{lat_str}" lon="{lon_str}" hae="0" ce="9999999" le="9999999" />
+  <detail>
+    <contact callsign="{callsign_esc}" />
+    <__group name="Cyan" role="Team" />
+    <remarks>{remarks_esc}</remarks>
+  </detail>
+</event>"""
+    return cot.encode("utf-8")
+
+
+def send_cot_for_detection(det: Dict[str, Any], noise_floor: Optional[float] = None) -> None:
+    """
+    Build and send a CoT marker for a single detection dict.
+    Expected keys: freq_mhz, power_dbm, band, timestamp, etc.
+    """
+    try:
+        freq_mhz = float(det.get("freq_mhz", 0.0))
+    except (TypeError, ValueError):
+        return
+
+    if freq_mhz <= 0:
+        return
+
+    power_dbm = float(det.get("power_dbm", 0.0))
+    band = det.get("band", "")
+
+    # Stable UID/callsign per frequency
+    callsign = f"RF-{freq_mhz:.3f}MHz"
+    uid = callsign
+
+    # Build remarks text for TAK details panel
+    parts = [f"Freq: {freq_mhz:.3f} MHz", f"Power: {power_dbm:.1f} dB"]
+    if noise_floor is not None:
+        above = power_dbm - noise_floor
+        parts.append(f"Noise floor: {noise_floor:.1f} dB")
+        parts.append(f"Above noise: {above:.1f} dB")
+    if band:
+        parts.append(f"Band: {band}")
+
+    remarks = " | ".join(parts)
+
+    payload = _build_cot(STATION_LAT, STATION_LON, uid, callsign, remarks)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.sendto(payload, (COT_HOST, COT_PORT))
+    finally:
+        sock.close()
+
+
+# ---------------------------------------------------------------------------
 # HackRF device detection
 # ---------------------------------------------------------------------------
+
 
 def list_hackrf_devices() -> List[Dict[str, str]]:
     """
@@ -56,6 +144,7 @@ def list_hackrf_devices() -> List[Dict[str, str]]:
 # ---------------------------------------------------------------------------
 # Sweep worker: noise floor + detection only (no spectrum/waterfall)
 # ---------------------------------------------------------------------------
+
 
 class SweepWorker(QtCore.QObject):
     log_message = QtCore.pyqtSignal(str)
@@ -205,7 +294,12 @@ class SweepWorker(QtCore.QObject):
                 # Persistence / hold-time: only count as detection if it has lasted long enough
                 if hold <= 0 or dwell >= hold:
                     detections.append(
-                        {"freq_mhz": freq_mhz, "power_dbm": p, "timestamp": now}
+                        {
+                            "freq_mhz": freq_mhz,
+                            "power_dbm": p,
+                            "timestamp": now,
+                            "band": band.get("name", ""),
+                        }
                     )
             else:
                 if st is not None and st.get("above", False):
@@ -247,6 +341,7 @@ class SweepWorker(QtCore.QObject):
 # Main Window (no spectrum/waterfall)
 # ---------------------------------------------------------------------------
 
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -257,6 +352,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # freq -> detection dict
         self.detections: Dict[float, Dict[str, Any]] = {}
+
+        # ATAK / thresholds / sound
+        self.current_noise_floor: Optional[float] = None
+        self.sound_effects: Dict[str, QSoundEffect] = {}
 
         self._build_ui()
         self._create_timers()
@@ -300,9 +399,11 @@ class MainWindow(QtWidgets.QMainWindow):
         det_layout.addWidget(QtWidgets.QLabel("Threshold (dB)"), row, 0)
         self.threshold_spin = QtWidgets.QDoubleSpinBox()
         self.threshold_spin.setDecimals(1)
-        self.threshold_spin.setRange(0.0, 50.0)
+        self.threshold_spin.setRange(0.0, 120.0)  # up to 120 dB above noise
         self.threshold_spin.setSingleStep(0.5)
         self.threshold_spin.setValue(3.0)
+        self.threshold_spin.setKeyboardTracking(True)
+        self.threshold_spin.setAccelerated(True)
         self.threshold_spin.setToolTip(
             "If 'Use local noise floor' is checked, this is dB ABOVE the\n"
             "estimated noise floor.\n"
@@ -323,6 +424,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.noise_floor_label = QtWidgets.QLabel("Noise floor: --.- dB")
         det_layout.addWidget(self.noise_floor_label, row, 2, 1, 2)
+
+        row += 1
+        self.eff_threshold_label = QtWidgets.QLabel("Effective threshold: --.- dB")
+        det_layout.addWidget(self.eff_threshold_label, row, 0, 1, 4)
 
         row += 1
         det_layout.addWidget(QtWidgets.QLabel("Persistence / hold time (s)"), row, 0)
@@ -348,6 +453,23 @@ class MainWindow(QtWidgets.QMainWindow):
             "0 = run sweeps back-to-back."
         )
         det_layout.addWidget(self.interval_spin, row, 3)
+
+        row += 1
+        self.beep_checkbox = QtWidgets.QCheckBox("Beep on detection")
+        self.beep_checkbox.setChecked(False)
+        self.beep_checkbox.setToolTip(
+            "Play a short sound whenever detections are reported."
+        )
+        det_layout.addWidget(self.beep_checkbox, row, 0, 1, 4)
+
+        row += 1
+        det_layout.addWidget(QtWidgets.QLabel("Alarm sound"), row, 0)
+        self.beep_sound_combo = QtWidgets.QComboBox()
+        self.beep_sound_combo.addItem("System beep (default)", userData="system")
+        self.beep_sound_combo.addItem("Soft ding", userData="soft_ding")
+        self.beep_sound_combo.addItem("Short chirp", userData="short_chirp")
+        self.beep_sound_combo.addItem("Alarm", userData="alarm")
+        det_layout.addWidget(self.beep_sound_combo, row, 1, 1, 3)
 
         main_layout.addWidget(det_group)
 
@@ -469,8 +591,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         main_layout.addWidget(band_group)
 
-        # Bottom: detection table + log in a splitter
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        # Debug / status group
+        debug_group = QtWidgets.QGroupBox("Debug / status")
+        dbg_layout = QtWidgets.QVBoxLayout(debug_group)
+        self.debug_label = QtWidgets.QLabel()
+        self.debug_label.setWordWrap(True)
+        dbg_layout.addWidget(self.debug_label)
+
+        # Bottom: alarms table + log + debug in a splitter
+        bottom_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
 
         self.table = QtWidgets.QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(
@@ -480,19 +609,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        splitter.addWidget(self.table)
 
         self.log_edit = QtWidgets.QTextEdit()
         self.log_edit.setReadOnly(True)
         font = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont)
         font.setPointSize(14)
         self.log_edit.setFont(font)
-        splitter.addWidget(self.log_edit)
 
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
+        bottom_splitter.addWidget(self.table)
+        bottom_splitter.addWidget(self.log_edit)
+        bottom_splitter.addWidget(debug_group)
+        bottom_splitter.setStretchFactor(0, 3)  # alarms gets priority
+        bottom_splitter.setStretchFactor(1, 1)
+        bottom_splitter.setStretchFactor(2, 1)
 
-        main_layout.addWidget(splitter, 1)
+        main_layout.addWidget(bottom_splitter, 1)
 
         # Connections
         self.start_btn.clicked.connect(self.start_watchdog)
@@ -502,6 +633,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.clear_log_btn.clicked.connect(self.clear_log)
         self.refresh_devices_btn.clicked.connect(self.refresh_device_list)
         self.use_noise_floor_cb.toggled.connect(self.on_use_noise_floor_toggled)
+        self.threshold_spin.valueChanged.connect(self.on_threshold_changed)
+
+        # Initial label / ranges / debug state
+        self.on_use_noise_floor_toggled(self.use_noise_floor_cb.isChecked())
+        self.update_effective_threshold_label()
+        self.update_debug_info(False)
 
     def _create_timers(self):
         self.update_timer = QtCore.QTimer(self)
@@ -521,12 +658,17 @@ class MainWindow(QtWidgets.QMainWindow):
             label = f"HackRF {dev['index']} – {dev['serial']}"
             self.device_combo.addItem(label, userData=dev["serial"])
 
-    # ---------------- Threshold mode switching ----------------
+    # ---------------- Threshold / status helpers ----------------
 
     def on_use_noise_floor_toggled(self, checked: bool):
+        """
+        When checked:
+          - Threshold is 'dB above noise floor', must be >= 0.
+        When unchecked:
+          - Threshold is an absolute dB level, can be negative.
+        """
         if checked:
-            # Threshold is "above noise floor" – only non-negative makes sense
-            self.threshold_spin.setRange(0.0, 50.0)
+            self.threshold_spin.setRange(0.0, 120.0)
             if self.threshold_spin.value() < 0:
                 self.threshold_spin.setValue(3.0)
             self.threshold_spin.setToolTip(
@@ -534,12 +676,102 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Noise floor is shown on the right."
             )
         else:
-            # Threshold is an absolute level; allow negative values
             self.threshold_spin.setRange(-150.0, 50.0)
             self.threshold_spin.setToolTip(
                 "Absolute threshold in dB as reported by hackrf_sweep.\n"
                 "Use this if you want to ignore the automatic noise floor estimate."
             )
+
+        if self.worker is not None:
+            self.worker.use_local_noise_floor = checked
+
+        self.update_effective_threshold_label()
+
+    def on_threshold_changed(self, value: float):
+        if self.worker is not None:
+            self.worker.threshold_db = float(value)
+        self.update_effective_threshold_label()
+
+    def update_effective_threshold_label(self):
+        thr = self.threshold_spin.value()
+        if self.use_noise_floor_cb.isChecked():
+            if self.current_noise_floor is None:
+                self.eff_threshold_label.setText(
+                    f"Effective threshold: (waiting for noise floor, offset {thr:.1f} dB)"
+                )
+            else:
+                abs_thr = self.current_noise_floor + thr
+                self.eff_threshold_label.setText(
+                    f"Effective threshold: {abs_thr:.1f} dB "
+                    f"(noise {self.current_noise_floor:.1f} + {thr:.1f})"
+                )
+        else:
+            self.eff_threshold_label.setText(
+                f"Effective threshold: {thr:.1f} dB (absolute)"
+            )
+
+    def update_debug_info(self, running: bool):
+        state = "RUNNING" if running else "Idle"
+        bin_width = self.bin_width_spin.value()
+        interval_ms = self.interval_spin.value()
+
+        bands_info = []
+        for label, enabled_cb, start_spin, stop_spin in [
+            ("A", self.bandA_enable, self.bandA_start, self.bandA_stop),
+            ("B", self.bandB_enable, self.bandB_start, self.bandB_stop),
+            ("C", self.bandC_enable, self.bandC_start, self.bandC_stop),
+        ]:
+            start = start_spin.value()
+            stop = stop_spin.value()
+            enabled = enabled_cb.isChecked() and (stop > start)
+            status = "enabled" if enabled else "disabled"
+            bands_info.append(f"{label}: {start:.3f}-{stop:.3f} MHz ({status})")
+
+        bands_text = "; ".join(bands_info) if bands_info else "None"
+
+        self.debug_label.setText(
+            f"State: {state}\n"
+            f"Bin width: {bin_width} Hz\n"
+            f"Interval: {interval_ms} ms\n"
+            f"Bands: {bands_text}"
+        )
+
+    # ---------------- Sound helper ----------------
+
+    def play_alarm_sound(self):
+        if not self.beep_checkbox.isChecked():
+            return
+
+        mode = self.beep_sound_combo.currentData()
+        if mode == "system" or mode is None:
+            QtWidgets.QApplication.beep()
+            return
+
+        filename_map = {
+            "soft_ding": "soft_ding.wav",
+            "short_chirp": "short_chirp.wav",
+            "alarm": "alarm.wav",
+        }
+        fname = filename_map.get(mode)
+        if not fname:
+            QtWidgets.QApplication.beep()
+            return
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        sound_path = os.path.join(base_dir, "sounds", fname)
+        if not os.path.exists(sound_path):
+            # Fallback if the file is missing
+            QtWidgets.QApplication.beep()
+            return
+
+        effect = self.sound_effects.get(mode)
+        if effect is None:
+            effect = QSoundEffect(self)
+            effect.setSource(QtCore.QUrl.fromLocalFile(sound_path))
+            effect.setVolume(0.9)  # 0..1
+            self.sound_effects[mode] = effect
+
+        effect.play()
 
     # ---------------- Worker control ----------------
 
@@ -616,6 +848,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.worker_thread.start()
         self.append_log("Starting watchdog...")
+        self.update_debug_info(True)
 
     def stop_watchdog(self):
         if self.worker is not None:
@@ -632,12 +865,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stop_btn.setEnabled(False)
         self.worker = None
         self.worker_thread = None
+        self.update_debug_info(False)
 
     # ---------------- Slots / helpers ----------------
 
     @QtCore.pyqtSlot(float)
     def on_noise_floor_updated(self, value: float):
+        self.current_noise_floor = value
         self.noise_floor_label.setText(f"Noise floor: {value:.1f} dB")
+        self.update_effective_threshold_label()
 
     @QtCore.pyqtSlot(list)
     def on_detections_found(self, detections: List[Dict[str, Any]]):
@@ -649,10 +885,19 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 existing["timestamp"] = d["timestamp"]
 
+        if detections:
+            self.play_alarm_sound()
+
+        # Send each detection directly to ATAK via CoT
+        for d in detections:
+            try:
+                send_cot_for_detection(d, noise_floor=self.current_noise_floor)
+            except Exception as e:
+                self.append_log(f"ATAK send error: {e}")
+
     def refresh_detection_table(self):
         now = time.time()
 
-        # Sort detections by most recent timestamp (newest first)
         items = sorted(
             self.detections.items(),
             key=lambda kv: kv[1]["timestamp"],
@@ -727,6 +972,8 @@ class MainWindow(QtWidgets.QMainWindow):
             else:
                 apply_to_band(target, start, stop)
         # "Custom" does nothing
+
+        self.update_debug_info(self.worker is not None)
 
     def apply_dark_mode(self, enabled: bool):
         if enabled:
