@@ -243,6 +243,18 @@ For each band (A, B, C):
 
 ---
 
+## Upgrading (from older versions)
+
+If you already have a previous HackRF Watchdog clone and your HackRF tools + Python environment already work:
+
+1. Download the latest ZIP from GitHub (or pull updates if you use Git)
+2. Replace your existing `main.py` and any updated files under `hackrf_watchdog/`
+3. Run:
+   ```powershell
+   python main.py
+
+---
+
 ## Troubleshooting (common)
 
 ### `git` is not recognized
