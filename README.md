@@ -290,4 +290,4 @@ Usually driver (Zadig/WinUSB) issue. Re-run Zadig and confirm WinUSB is installe
 
 ## License
 
-TBD.
+MIT
