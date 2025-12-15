@@ -18,42 +18,48 @@ It’s meant to sit in the corner and **tell you when RF activity appears**, not
 
 ## Features
 
-- **Three configurable bands (A, B, C)**  
-  Each with start/stop frequency in MHz and enable checkbox.
+### Core RF “Tripwire”
+- Sweeps one or more bands using `hackrf_sweep`
+- Local noise floor estimation (optional)
+- Two threshold modes:
+  - **Relative:** threshold is dB **above** noise floor (0–120 dB range)
+  - **Absolute:** threshold is an absolute dB level (-150 to +50 dB range)
+- **Effective threshold readout** showing the true absolute threshold in dB (noise + offset, or absolute)
+- **Detection persistence / hold time (s)**: signal must stay above threshold for N seconds before triggering
+- Detection table: Frequency / Power / Age
+- Text log of max levels per sweep + errors
 
-- **Configurable bin width**  
-  Controls the FFT bin width (2445–5,000,000 Hz).  
-  Smaller = higher frequency resolution, slower sweeps.  
-  Larger = coarser resolution, faster sweeps.
+### Bands, presets, and resolution
+- **Three configurable bands (A, B, C)** with enable toggles + start/stop MHz
+- **Automatic bin width selection (default)**
+  - “Auto” checkbox + “Max bins” target (e.g., 400) to avoid accidental “too many bins” settings
+  - Advanced users can disable Auto and set bin width manually
+- Improved presets:
+  - **VHF Ham** (144–148 MHz)
+  - **UHF Ham + GMRS/FRS** (420–470 MHz plus 462/467 MHz area)
 
-- **Local noise floor estimation**  
-  Per-sweep noise floor is estimated from the lower 80% of power samples and smoothed over time.
+### Device and calibration controls
+- HackRF device selection by serial (via `hackrf_info`) so multiple instances can run (one per HackRF)
+- **Bias-T / antenna power toggle** (best effort via `hackrf_biast`, and `-p 1` for sweeps)
+- **Power calibration**
+  - Antenna/LNA gain (dB) and feedline loss (dB)
+  - Shows net offset (gain − loss) and applies it before thresholding
+- **Frequency correction (ppm)** for aligning displayed/detected frequency
 
-- **Two threshold modes**
-  - *Relative*: Threshold (dB) above the estimated noise floor.
-  - *Absolute*: Threshold is an absolute dB value from `hackrf_sweep`.
+### UI / quality-of-life
+- Dark mode toggle
+- Configurable alarm sounds (“System beep”, “Soft ding”, “Short chirp”, “Alarm”) + “Beep on detection” toggle
+- Debug / status panel (Idle/RUNNING, bin width, interval, bias-T state, and band status)
+- Bottom layout uses a **resizable vertical splitter** so alarms/log/debug can be resized as needed
 
-- **Detection persistence (“hold time”)**  
-  A signal must stay above threshold for a configurable number of seconds before it is considered a detection.  
-  This prevents one-off spikes from triggering.
-
-- **Detection table**
-  - One row per frequency that has ever met the detection rule since Start.
-  - Columns: `Frequency (MHz)`, `Power (dB)`, `Age (s)`
-  - `Age (s)` = time since this frequency was last seen above threshold.
-  - Rows are sorted by most recent (smallest age) first.
-
-- **Text log**
-  - Logs the max power per sweep per band
-  - Logs errors from `hackrf_sweep` (e.g. device busy, not found)
-
-- **Device selection by serial**
-  - Dropdown lists connected HackRF boards (via `hackrf_info`) as:
-    `HackRF 0 – SERIAL`, `HackRF 1 – SERIAL`, etc.
-  - You can run multiple instances of the app and bind each to a different board.
-
-- **Dark mode toggle**
-  Simple dark theme for the UI.
+### ATAK / CoT Bridge (NEW)
+- Separate ATAK Bridge window that launches with Watchdog
+- Bridge enable/disable toggle
+- Configurable destination host + port (multicast or unicast)
+- “Send test” button + marker preview
+- User group name/color + role fields
+- Settings persist across restarts
+- Bind local IP option (helpful on Windows when multicast routing picks the wrong adapter)
 
 ---
 
@@ -232,7 +238,8 @@ If you run multiple instances, bind each instance to a different serial to avoid
 For each band (A, B, C):
 - Enable/disable
 - Set start/stop frequency (MHz)
-- Use presets (VHF+UHF Ham, 915 MHz ISM, 2.4 GHz ISM, 5.8 GHz ISM)
+- Use presets (VHF Ham, UHF Ham + GMRS/FRS, 915 MHz ISM, 2.4 GHz ISM, 5.8 GHz ISM)
+- Bin width can be set manually or automatically via Auto + Max bins
 
 ---
 
@@ -263,9 +270,9 @@ Usually driver (Zadig/WinUSB) issue. Re-run Zadig and confirm WinUSB is installe
 
 ## Future work / ideas
 
-- Notifications for alarms (sound/popup)
-- ATAK integration (CoT export)
 - Optional spectrum/waterfall module
+- Better ATAK “auto-detect” helpers (show all local IPv4s and warn about VPN/virtual adapters)
+- Raspberry Pi / Linux packaging + desktop launcher
 
 ---
 
