@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=HackRF Watchdog
+Comment=RF tripwire using hackrf_sweep
+Exec=/home/pi/hackrf-watchdog/packaging/linux/run_watchdog.sh
+Path=/home/pi/hackrf-watchdog
+Terminal=false
+Categories=Utility;
