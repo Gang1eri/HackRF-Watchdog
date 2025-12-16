@@ -194,7 +194,7 @@ python -m pip install --upgrade pip
 With the venv active:
 
 ```powershell
-pip install -r requirements.txt
+pip install -r requirements-windows.txt
 ```
 
 ---
