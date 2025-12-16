@@ -67,10 +67,10 @@ It’s meant to sit in the corner and **tell you when RF activity appears**, not
 
 Choose your platform:
 
-- **Raspberry Pi OS (Bookworm, 64-bit):** see `docs/install-pi-bookworm.md`
-- **Windows 10/11:** see `docs/install-windows.md`
+- **Raspberry Pi OS (Bookworm, 64-bit):** see [docs/install-pi-bookworm.md](docs/install-pi-bookworm.md)
+- **Windows 10/11:** see [docs/install-windows.md](docs/install-windows.md)
 
-> Tip: If you're on Raspberry Pi, install PyQt5 via `apt` (not `pip`) so QtMultimedia (sound) works reliably.
+> Tip (Pi): Install PyQt5 via `apt` (not `pip`) so QtMultimedia (sound) works reliably.
 
 ---
 
