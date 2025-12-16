@@ -1,4 +1,5 @@
-atak_bridge.py
+# Local-only helper script (ignore only if it's in the repo root)
+#/atak_bridge.py
 
 # Python bytecode
 __pycache__/
@@ -7,7 +8,17 @@ __pycache__/
 # Virtual environment
 .venv/
 
-# OS junk
+# Packaging/build artifacts
+hackrf_watchdog.egg-info/
+build/
+dist/
+
+# OS / editor junk
 .DS_Store
 Thumbs.db
-hackrf_watchdog.egg-info/
+*~
+*.swp
+*.swo
+
+# Logs
+*.log
